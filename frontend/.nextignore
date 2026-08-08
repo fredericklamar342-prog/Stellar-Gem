@@ -1,0 +1,5 @@
+**/__tests__/**
+**/*.test.js
+**/*.test.jsx
+**/*.test.ts
+**/*.test.tsx

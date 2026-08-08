@@ -1,0 +1,115 @@
+namespace: stellar-indigopay
+
+backend:
+  image: stellar-indigopay/backend:latest
+  replicas: 2
+  port: 4000
+  serviceMonitor:
+    enabled: false
+  shutdownTimeoutMs: 30000
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "128Mi"
+    limits:
+      cpu: "500m"
+      memory: "512Mi"
+
+frontend:
+  image: stellar-indigopay/frontend:latest
+  replicas: 2
+  port: 3000
+
+postgres:
+  image: postgres:16-alpine
+  storage: 10Gi
+  # ── Streaming Replication ─────────────────────────────────────────
+  # Enable to deploy a warm standby in a second region/zone.
+  replication:
+    enabled: false
+    # Replication user created on the primary with REPLICATION privilege.
+    user: replicator
+    # Override password via --set or values-prod.yaml.
+    password: ""
+    # Number of WAL senders and replication slots on the primary.
+    maxWalSenders: 5
+    maxReplicationSlots: 5
+    walKeepSize: 1GB
+    # WAL archiving to S3 (fallback for standby catch-up).
+    walArchive:
+      enabled: false
+      s3Bucket: ""
+      s3Prefix: "wal/"
+  # ── Standby (warm replica) ────────────────────────────────────────
+  standby:
+    enabled: false
+    # Node affinity zone — schedule the standby in a different AZ.
+    zone: us-west-2b
+    storage: 10Gi
+    # Primary host the standby connects to for streaming replication.
+    primaryHost: postgres-primary-svc
+    primaryPort: 5432
+
+config:
+  stellarNetwork: testnet
+  horizonUrl: https://horizon-testnet.stellar.org
+  sorobanRpcUrl: https://soroban-testnet.stellar.org
+  contractId: ""
+  usdcIssuer: ""
+  emailFrom: "Stellar-IndigoPay <updates@yourdomain.com>"
+
+secrets:
+  postgresUser: postgres
+  # Override this in a gitignored values-prod.yaml or via --set secrets.postgresPassword=...
+  # Never commit a real password here. Generate one with: openssl rand -base64 24
+  postgresPassword: ""
+  postgresDb: stellar_indigopay
+  # Replication credentials for streaming standby. Only used when
+  # postgres.replication.enabled is true.
+  postgresReplicationUser: replicator
+  postgresReplicationPassword: ""
+  resendApiKey: ""
+  adminApiKey: ""
+  metricsBearerToken: ""
+
+ingress:
+  host: stellar-indigopay.local
+  className: nginx
+
+# ── Autoscaling (HPA) ──────────────────────────────────────────────
+# Mirrors k8s/hpa-backend.yaml. Set enabled: true in values-prod.yaml
+# to opt in. The HPA template only renders when enabled.
+autoscaling:
+  enabled: false
+  minReplicas: 2
+  maxReplicas: 10
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 80
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      percent: 50
+      periodSeconds: 60
+    scaleUp:
+      stabilizationWindowSeconds: 30
+      percent: 100
+      periodSeconds: 30
+
+# ── PodDisruptionBudget ────────────────────────────────────────────
+# Mirrors k8s/pdb-backend.yaml. minAvailable is interpreted by the
+# eviction API as the number of pods (or percentage) that must remain
+# available during voluntary disruptions.
+pdb:
+  enabled: false
+  minAvailable: 1

@@ -1,0 +1,151 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+
+jobs:
+  frontend:
+    name: Frontend (Next.js)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npm run type-check
+      - run: npm run lint
+      - run: npm run build
+        env:
+          NEXT_PUBLIC_STELLAR_NETWORK: testnet
+          NEXT_PUBLIC_HORIZON_URL: https://horizon-testnet.stellar.org
+          NEXT_PUBLIC_API_URL: http://localhost:4000
+
+  backend:
+    name: Backend (Node.js)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: backend/package-lock.json
+      - run: npm ci
+      - run: npm run lint
+      - run: docker compose -f docker-compose.test.yml up --abort-on-container-exit --exit-code-from backend --build
+        working-directory: .
+
+  contracts:
+    name: Soroban Contracts (Rust)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: contracts
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32v1-none
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: contracts
+      - run: cargo check --workspace
+      - run: cargo test --workspace
+      - run: cargo build --workspace --target wasm32v1-none --release
+
+  helm:
+    name: Helm Chart Validation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v3
+        with:
+          version: latest
+      - uses: azure/setup-kubectl@v3
+        with:
+          version: latest
+      - run: helm lint helm/indigopay/
+      - name: Validate Helm templates (syntax + YAML)
+        run: helm template stellar-indigopay helm/indigopay/ > /dev/null
+        # helm template validates Go template syntax and value rendering; no
+        # cluster access is required, unlike kubectl apply --dry-run (which
+        # needs a running K8s API server even with --validate=false).
+
+  gitleaks:
+    name: Secret scanning
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install gitleaks
+        run: |
+          GITLEAKS_VERSION="8.30.1"
+          OS=$(uname -s | tr '[:upper:]' '[:lower:]')
+          ARCH=$(uname -m | sed 's/x86_64/x64/;s/aarch64/arm64/')
+          curl -sL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_${OS}_${ARCH}.tar.gz" -o /tmp/gitleaks.tar.gz
+          tar xzf /tmp/gitleaks.tar.gz -C /tmp
+          sudo mv /tmp/gitleaks /usr/local/bin/gitleaks
+      - name: Secret scanning
+        run: gitleaks detect --config .gitleaks.toml --source . --no-git --exit-code 1
+
+  openapi-lint:
+    name: OpenAPI Spec Validation (Spectral)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Validate OpenAPI spec with Spectral (built-in OAS rules)
+        run: npx @stoplight/spectral-cli@6.14.3 lint docs/api/openapi.yaml --ruleset .spectral.yaml
+
+      - name: Install dependencies for custom validation
+        run: npm ci
+
+      - name: Validate project-specific conventions (429, descriptions, summaries)
+        run: node scripts/validate-openapi.js
+
+  zap_scan:
+    name: DAST Security Scan (OWASP ZAP)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Run ZAP Baseline Scan
+        uses: zaproxy/action-baseline@v0.14.0
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          # Default to a placeholder; override per-env in the GitHub UI or
+          # via a `ZAP_TARGET` repository variable once staging is live.
+          target: ${{ vars.ZAP_TARGET || 'https://example.com' }}
+          cmd_options: "-J report.json"
+          fail_action: false
+        continue-on-error: true
+
+      - name: Run Security Triage Script
+        env:
+          ZAP_TARGET: ${{ vars.ZAP_TARGET || 'https://example.com' }}
+        run: node scripts/triage-zap.js
+
+      - name: Upload ZAP Reports
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: zap-scan-report
+          path: |
+            report_html.html
+            report.json
+          retention-days: 14
+          if-no-files-found: warn

@@ -1,0 +1,150 @@
+# monitoring/alert-rules.yml
+# Alerting rules evaluated by Prometheus every `evaluation_interval` (15s).
+# Severity levels: page (wake someone up) | warn (look at during business hours).
+
+groups:
+  - name: stellar-indigopay-backend-http
+    interval: 30s
+    rules:
+      - alert: BackendHigh5xxRate
+        expr: |
+          sum(rate(http_requests_total{job="stellar-indigopay-backend",status_code=~"5.."}[5m]))
+            /
+          sum(rate(http_requests_total{job="stellar-indigopay-backend"}[5m]))
+            > 0.05
+        for: 5m
+        labels:
+          severity: page
+        annotations:
+          summary: "Backend 5xx rate above 5% for 5m"
+          description: |
+            More than 5% of HTTP responses in the last 5 minutes returned 5xx.
+            Check Sentry and the readiness endpoint.
+
+      - alert: BackendHighP99Latency
+        expr: |
+          histogram_quantile(0.99,
+            sum by (route) (rate(http_request_duration_seconds_bucket{job="stellar-indigopay-backend"}[5m]))
+          ) > 2
+        for: 10m
+        labels:
+          severity: warn
+        annotations:
+          summary: "Backend p99 latency above 2s for 10m on {{ $labels.route }}"
+
+  - name: stellar-indigopay-rate-limit
+    interval: 30s
+    rules:
+      - alert: HighRateLimitExhaustion
+        expr: |
+          sum(rate(indigopay_rate_limit_hits_total{job="stellar-indigopay-backend"}[5m]))
+            /
+          sum(rate(http_requests_total{job="stellar-indigopay-backend"}[5m]))
+            > 0.10
+        for: 5m
+        labels:
+          severity: warn
+        annotations:
+          summary: "More than 10% of requests are being rate-limited"
+          description: |
+            {{ $value | humanizePercentage }} of all HTTP requests in the last 5m
+            were rejected with HTTP 429. This may indicate a misconfigured client,
+            a DDoS attempt, or an overly aggressive retry loop.
+
+      - alert: PerEndpointRateLimitSpike
+        expr: |
+          rate(indigopay_rate_limit_hits_total{job="stellar-indigopay-backend"}[5m]) > 5
+        for: 5m
+        labels:
+          severity: warn
+        annotations:
+          summary: "{{ $labels.endpoint }} is being rate-limited heavily (>5/s for 5m)"
+          description: |
+            Endpoint {{ $labels.endpoint }} (method={{ $labels.method }}, strategy={{ $labels.strategy }})
+            is being rate-limited at {{ $value | humanize }} per second. Check for
+            aggressive clients or potential abuse.
+
+      - alert: TokenBucketExhausted
+        expr: |
+          indigopay_rate_limit_remaining{job="stellar-indigopay-backend",strategy="token-bucket"} == 0
+        for: 5m
+        labels:
+          severity: warn
+        annotations:
+          summary: "Token bucket empty on {{ $labels.endpoint }} for 5m"
+          description: |
+            The token-bucket rate limiter on endpoint {{ $labels.endpoint }}
+            has been empty for over 5 minutes. Clients consuming at or above
+            the refill rate are keeping the bucket drained. Consider raising
+            the capacity or refill rate if this is expected traffic.
+            NOTE: This gauge only updates on request — if traffic stops, the
+            alert resolves when the next successful request updates the gauge.
+
+  - name: stellar-indigopay-backend-database
+    interval: 30s
+    rules:
+      - alert: DbPoolExhausted
+        expr: db_pool_waiting_count{job="stellar-indigopay-backend"} > 5
+        for: 2m
+        labels:
+          severity: page
+        annotations:
+          summary: "Postgres pool has > 5 waiting clients for 2m"
+          description: "Consider raising DB_POOL_MAX or investigating slow queries."
+
+      - alert: DbQuerySlow
+        expr: |
+          histogram_quantile(0.99,
+            sum by (operation) (rate(db_query_duration_seconds_bucket{job="stellar-indigopay-backend"}[5m]))
+          ) > 0.5
+        for: 10m
+        labels:
+          severity: warn
+        annotations:
+          summary: "Postgres p99 query latency above 500ms for 10m on op={{ $labels.operation }}"
+
+  - name: stellar-indigopay-backend-backup
+    interval: 30s
+    rules:
+      - alert: BackupVerificationFailed
+        expr: indigopay_backup_verification_passed == 0
+        for: 0m
+        labels:
+          severity: page
+          routing: pagerduty
+        annotations:
+          summary: "Database backup verification failed"
+          description: "The nightly backup at {{ $labels.backup_path }} failed verification. Investigate immediately — the backup may be corrupt or unrecoverable."
+
+  - name: stellar-indigopay-backend-readiness
+    interval: 30s
+    rules:
+      - alert: ReadinessProbeFailing
+        # We can't directly scrape /api/readyz, so this rule fires when the
+        # in-process readiness_log metric indicates a failure. The wrapper
+        # increments readiness_check_failed_total when /api/readyz returns 503.
+        expr: increase(readiness_check_failed_total{job="stellar-indigopay-backend"}[5m]) > 0
+        for: 3m
+        labels:
+          severity: page
+        annotations:
+          summary: "Backend readiness has been failing for 3m"
+
+      - alert: QueueDepthHigh
+        expr: sum by (queue) (queue_failed{job="stellar-indigopay-backend"}) > 100
+        for: 10m
+        labels:
+          severity: warn
+        annotations:
+          summary: "Queue failed jobs count is high (>100) for 10m on {{ $labels.queue }}"
+          description: |
+            There are more than 100 failed jobs in queue '{{ $labels.queue }}' for the last 10 minutes.
+            Check the worker logs.
+
+      - alert: OracleStale
+        expr: time() - indigopay_oracle_price_updated_timestamp > 900
+        for: 5m
+        labels:
+          severity: page
+        annotations:
+          summary: "Oracle price is stale (>15 min since last update)"
