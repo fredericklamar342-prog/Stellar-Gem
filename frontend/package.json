@@ -39,7 +39,7 @@
     "@typescript-eslint/eslint-plugin": "^8.64.0",
     "@typescript-eslint/parser": "^8.64.0",
     "autoprefixer": "^10.0.1",
-    "eslint": "^8.57.1",
+    "eslint": "^10.8.0",
     "eslint-config-next": "^14.2.3",
     "jest": "^30.4.2",
     "jest-environment-jsdom": "^30.4.1",
