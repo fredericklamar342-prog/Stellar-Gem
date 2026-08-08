@@ -22,7 +22,7 @@
     "next": "14.2.3",
     "qrcode.react": "^4.2.0",
     "react": "^18.3.1",
-    "react-dom": "^18.3.1",
+    "react-dom": "^19.2.8",
     "react-leaflet": "4.2.1",
     "recharts": "^2.15.4",
     "sonner": "^2.0.7"
@@ -35,7 +35,7 @@
     "@types/leaflet": "^1.9.21",
     "@types/node": "^20",
     "@types/react": "^18",
-    "@types/react-dom": "^18",
+    "@types/react-dom": "^19",
     "@typescript-eslint/eslint-plugin": "^8.64.0",
     "@typescript-eslint/parser": "^8.64.0",
     "autoprefixer": "^10.0.1",
