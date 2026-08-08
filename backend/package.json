@@ -29,7 +29,7 @@
     "express-rate-limit": "^8.5.2",
     "helmet": "^8.2.0",
     "iconv-lite": "^0.7.2",
-    "ioredis": "^5.4.2",
+    "ioredis": "^6.0.0",
     "js-yaml": "^4.1.0",
     "jsonwebtoken": "^9.0.3",
     "morgan": "^1.10.0",
